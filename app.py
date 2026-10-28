@@ -3,10 +3,10 @@ import datetime
 import time
 
 # Configuración de la página
-st.set_page_config(page_title="Mi Primer Reloj", page_icon="⏰", layout="centered")
+st.set_page_config(page_title="GABO", page_icon="⏰", layout="centered")
 
 # Título de la app
-st.title("⏰ Mi Primer Reloj en Streamlit")
+st.title("⏰ Mi Primer Reloj en Streamlit -  GABO")
 
 # Contenedor para el reloj para evitar saltos visuales
 placeholder = st.empty()
