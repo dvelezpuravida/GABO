@@ -2,3 +2,5 @@ streamlit
 chromadb
 sentence-transformers
 google-genai
+pdfplumber
+langchain-text-splitters
