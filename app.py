@@ -12,21 +12,24 @@ st.markdown("""
     <div style='text-align: center;'>
         <h1>🏹 ASTICA RAG Bot</h1>
         <h3>¡Hola! Soy <b>Gabo el Garrobo</b> 🦎, tu asistente de tiro con arco</h3>
-        <p style='color: gray;'>Pregúntame cualquier detalle sobre las actas oficiales de la Junta Directiva</p>
+        <p style='color: gray;'>Pregúntame sobre actas, respuestas de torneos, accesos o cualquier documento de ASTICA</p>
     </div>
 """, unsafe_allow_html=True)
 
 # 2. Inicializar recursos del sistema RAG de forma persistente o en caché
 @st.cache_resource
-def cargar_recursos_rag():
+def cargar_recursos():
     # Cargar modelo de embeddings
     model = SentenceTransformer('all-MiniLM-L6-v2')
-    # Conectar a la BD vectorial local de Chroma (se sube al Git junto con el proyecto)
+    # Conectar a la BD vectorial local de Chroma
     client_chroma = chromadb.PersistentClient(path="./chroma_db")
     collection = client_chroma.get_or_create_collection(name="actas_asociacion")
     return model, collection
 
-model, collection = cargar_recursos_rag()
+try:
+    model, collection = cargar_recursos()
+except Exception as e:
+    st.error(f"Error inicializando la base de datos vectorial: {e}")
 
 # 3. Configurar cliente de generación de forma segura
 gemini_key = os.environ.get("GOOGLE_API_KEY", "")
@@ -45,7 +48,7 @@ for message in st.session_state.messages:
         st.markdown(message["content"])
 
 # 5. Entrada del usuario
-if user_query := st.chat_input("¿Qué acuerdo se tomó sobre el servicio de alimentación?"):
+if user_query := st.chat_input("¿Cuáles son las tareas pendientes de la asociación?"):
     # Mostrar pregunta del usuario
     st.session_state.messages.append({"role": "user", "content": user_query})
     with st.chat_message("user", avatar="👤"):
@@ -54,19 +57,22 @@ if user_query := st.chat_input("¿Qué acuerdo se tomó sobre el servicio de ali
     # Generar la respuesta del asistente
     with st.chat_message("assistant", avatar="🦎"):
         message_placeholder = st.empty()
-        message_placeholder.markdown("🔍 *Gabo está revisando las actas de ASTICA...*")
+        message_placeholder.markdown("🔍 *Gabo está buscando en todos los documentos de ASTICA...*")
         
         # A. Recuperar contexto de ChromaDB
         try:
             query_embedding = model.encode(user_query).tolist()
-            results = collection.query(query_embeddings=[query_embedding], n_results=3)
+            results = collection.query(query_embeddings=[query_embedding], n_results=4)
             
             formatted_context_list = []
-            for idx in range(len(results['documents'][0])):
-                doc = results['documents'][0][idx]
-                meta = results['metadatas'][0][idx]
-                formatted_context_list.append(f"[Fuente: {meta['source']} - Fragmento {meta['index']}]\n{doc}")
-            context = "\n\n---\n\n".join(formatted_context_list)
+            if results and results['documents'] and len(results['documents'][0]) > 0:
+                for idx in range(len(results['documents'][0])):
+                    doc = results['documents'][0][idx]
+                    meta = results['metadatas'][0][idx]
+                    formatted_context_list.append(f"[Fuente: {meta['source']}]\n{doc}")
+                context = "\n\n---\n\n".join(formatted_context_list)
+            else:
+                context = ""
         except Exception as e:
             context = ""
             st.error(f"Error al consultar la base de datos de Gabo: {e}")
@@ -81,8 +87,8 @@ Responde de manera amigable, entusiasta y muy clara en español, usando ocasiona
 Tu tarea es responder la pregunta basándote ÚNICA y EXCLUSIVAMENTE en el contexto provisto abajo.
 
 Reglas estrictas:
-- Si la respuesta no se puede deducir del contexto, di textualmente: 'No encuentro información sobre esa consulta en las actas que tengo guardadas bajo mi piedra.' No inventes nada.
-- Al final, menciona de qué fragmentos provino la información.
+- Si la respuesta no se puede deducir del contexto, di textualmente: 'No encuentro información sobre esa consulta en los archivos que tengo guardados bajo mi piedra.' No inventes nada.
+- Al final, menciona de qué documentos/fuentes provino la información.
 
 Contexto:
 {context}
@@ -98,7 +104,7 @@ Respuesta de Gabo:"""
                 )
                 full_response = response.text
             except Exception as e:
-                full_response = f"¡Ups! Tuve un inconveniente al conectar con el cerebro de Gemini: {e}"
+                full_response = f"¡Ups! Tuve un inconveniente al conectar con mi cerebro de IA: {e}"
         else:
             full_response = "⚠️ Por favor, introduce tu Gemini API Key en la barra lateral izquierda para que pueda responderte."
 
