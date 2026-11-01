@@ -93,7 +93,7 @@ Pregunta del usuario:
 Respuesta de Gabo:"""
                 
                 response = client_gemini.models.generate_content(
-                    model='gemini-2.5-flash',
+                    model='gemini-3.8-flash',
                     contents=prompt
                 )
                 full_response = response.text
