@@ -1,8 +1,14 @@
+import logging
+import os
+from pathlib import Path
+
 import streamlit as st
 import chromadb
 from sentence_transformers import SentenceTransformer
 from google import genai
-import os
+
+logger = logging.getLogger(__name__)
+CHROMA_DB_PATH = Path(__file__).resolve().parent / "chroma_db"
 
 # 1. Configuración de la interfaz con la identidad de Gabo el Garrobo
 st.set_page_config(page_title="Gabo el Garrobo - ASTICA RAG", page_icon="🦎", layout="centered")
@@ -19,17 +25,33 @@ st.markdown("""
 # 2. Inicializar recursos del sistema RAG de forma persistente o en caché
 @st.cache_resource
 def cargar_recursos():
-    # Cargar modelo de embeddings
-    model = SentenceTransformer('all-MiniLM-L6-v2')
     # Conectar a la BD vectorial local de Chroma
-    client_chroma = chromadb.PersistentClient(path="./chroma_db")
-    collection = client_chroma.get_or_create_collection(name="actas_asociacion")
+    client_chroma = chromadb.PersistentClient(path=str(CHROMA_DB_PATH))
+    collection = client_chroma.get_collection(name="actas_asociacion")
+    document_count = collection.count()
+    if document_count == 0:
+        raise RuntimeError(
+            f"La colección 'actas_asociacion' está vacía en {CHROMA_DB_PATH}."
+        )
+    logger.info(
+        "Colección actas_asociacion cargada desde %s con %s fragmentos",
+        CHROMA_DB_PATH,
+        document_count,
+    )
+    # Cargar modelo de embeddings después de validar la colección.
+    model = SentenceTransformer('all-MiniLM-L6-v2')
     return model, collection
 
 try:
     model, collection = cargar_recursos()
 except Exception as e:
-    st.error(f"Error inicializando la base de datos vectorial: {e}")
+    logger.exception("No se pudo inicializar la base vectorial")
+    st.error(
+        f"No se pudo cargar la base vectorial en {CHROMA_DB_PATH}. "
+        f"Verifica que la carpeta y la colección 'actas_asociacion' estén "
+        f"incluidas en el despliegue. Detalle: {e}"
+    )
+    st.stop()
 
 # 3. Configurar cliente de generación de forma segura
 try:
@@ -72,16 +94,35 @@ if user_query := st.chat_input("¿Cuáles son las tareas pendientes de la asocia
             
             formatted_context_list = []
             if results and results['documents'] and len(results['documents'][0]) > 0:
+                sources = []
                 for idx in range(len(results['documents'][0])):
                     doc = results['documents'][0][idx]
                     meta = results['metadatas'][0][idx]
-                    formatted_context_list.append(f"[Fuente: {meta['source']}]\n{doc}")
+                    source = (
+                        meta.get('source', 'Fuente desconocida')
+                        if meta
+                        else 'Fuente desconocida'
+                    )
+                    sources.append(source)
+                    formatted_context_list.append(f"[Fuente: {source}]\n{doc}")
                 context = "\n\n---\n\n".join(formatted_context_list)
+                logger.info(
+                    "Consulta vectorial: %s fragmentos recuperados; fuentes: %s",
+                    len(formatted_context_list),
+                    ", ".join(sources),
+                )
+                st.caption(
+                    f"Diagnóstico de búsqueda: {len(formatted_context_list)} "
+                    f"fragmentos recuperados."
+                )
             else:
                 context = ""
+                logger.info("Consulta vectorial: no se recuperaron fragmentos")
+                st.caption("Diagnóstico de búsqueda: no se recuperaron fragmentos.")
         except Exception as e:
-            context = ""
+            logger.exception("Error al consultar la base vectorial")
             st.error(f"Error al consultar la base de datos de Gabo: {e}")
+            st.stop()
 
         # B. Responder usando Gemini si hay API Key disponible
         if gemini_key:
