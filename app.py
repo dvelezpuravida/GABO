@@ -27,29 +27,56 @@ st.markdown("""
 def cargar_recursos():
     # Conectar a la BD vectorial local de Chroma
     client_chroma = chromadb.PersistentClient(path=str(CHROMA_DB_PATH))
-    collection = client_chroma.get_collection(name="actas_asociacion")
-    document_count = collection.count()
-    if document_count == 0:
+    collection_names = [
+        str(getattr(item, "name", item))
+        for item in client_chroma.list_collections()
+    ]
+    if not collection_names:
+        db_file = CHROMA_DB_PATH / "chroma.sqlite3"
+        db_status = (
+            f"Existe chroma.sqlite3 ({db_file.stat().st_size} bytes)."
+            if db_file.is_file()
+            else "No existe chroma.sqlite3."
+        )
         raise RuntimeError(
-            f"La colección 'actas_asociacion' está vacía en {CHROMA_DB_PATH}."
+            "No se encontraron colecciones en Chroma. "
+            f"Base esperada: {db_status}"
+        )
+
+    collections = [
+        client_chroma.get_collection(name=name)
+        for name in collection_names
+    ]
+    collection_counts = {
+        collection.name: collection.count()
+        for collection in collections
+    }
+    collections = [
+        collection for collection in collections
+        if collection_counts[collection.name] > 0
+    ]
+    if not collections:
+        raise RuntimeError(
+            f"Las colecciones encontradas están vacías en {CHROMA_DB_PATH}: "
+            f"{collection_counts}."
         )
     logger.info(
-        "Colección actas_asociacion cargada desde %s con %s fragmentos",
+        "Colecciones cargadas desde %s: %s",
         CHROMA_DB_PATH,
-        document_count,
+        {collection.name: collection_counts[collection.name] for collection in collections},
     )
     # Cargar modelo de embeddings después de validar la colección.
     model = SentenceTransformer('all-MiniLM-L6-v2')
-    return model, collection
+    return model, collections
 
 try:
-    model, collection = cargar_recursos()
+    model, collections = cargar_recursos()
 except Exception as e:
     logger.exception("No se pudo inicializar la base vectorial")
     st.error(
         f"No se pudo cargar la base vectorial en {CHROMA_DB_PATH}. "
-        f"Verifica que la carpeta y la colección 'actas_asociacion' estén "
-        f"incluidas en el despliegue. Detalle: {e}"
+        f"Verifica que la carpeta y las colecciones estén incluidas en el "
+        f"despliegue. Detalle: {e}"
     )
     st.stop()
 
@@ -90,35 +117,56 @@ if user_query := st.chat_input("¿Cuáles son las tareas pendientes de la asocia
         # A. Recuperar contexto de ChromaDB
         try:
             query_embedding = model.encode(user_query).tolist()
-            results = collection.query(query_embeddings=[query_embedding], n_results=4)
-            
-            formatted_context_list = []
-            if results and results['documents'] and len(results['documents'][0]) > 0:
-                sources = []
-                for idx in range(len(results['documents'][0])):
-                    doc = results['documents'][0][idx]
-                    meta = results['metadatas'][0][idx]
+            candidates = []
+            searched_collections = []
+            for collection in collections:
+                results = collection.query(
+                    query_embeddings=[query_embedding],
+                    n_results=4,
+                    include=["documents", "metadatas", "distances"],
+                )
+                searched_collections.append(collection.name)
+                documents = results["documents"][0]
+                metadatas = results["metadatas"][0]
+                distances = results["distances"][0]
+
+                for doc, meta, distance in zip(documents, metadatas, distances):
+                    if doc is None:
+                        continue
                     source = (
-                        meta.get('source', 'Fuente desconocida')
+                        meta.get("source", collection.name)
                         if meta
-                        else 'Fuente desconocida'
+                        else collection.name
                     )
-                    sources.append(source)
-                    formatted_context_list.append(f"[Fuente: {source}]\n{doc}")
-                context = "\n\n---\n\n".join(formatted_context_list)
+                    candidates.append((distance, source, doc))
+
+            candidates.sort(key=lambda result: result[0])
+            selected_results = candidates[:4]
+            if selected_results:
+                context = "\n\n---\n\n".join(
+                    f"[Fuente: {source}]\n{doc}"
+                    for _, source, doc in selected_results
+                )
                 logger.info(
-                    "Consulta vectorial: %s fragmentos recuperados; fuentes: %s",
-                    len(formatted_context_list),
-                    ", ".join(sources),
+                    "Consulta vectorial: %s fragmentos recuperados en %s",
+                    len(selected_results),
+                    ", ".join(searched_collections),
                 )
                 st.caption(
-                    f"Diagnóstico de búsqueda: {len(formatted_context_list)} "
-                    f"fragmentos recuperados."
+                    f"Diagnóstico de búsqueda: {len(selected_results)} "
+                    f"fragmentos recuperados en {len(searched_collections)} "
+                    "colección(es)."
                 )
             else:
                 context = ""
-                logger.info("Consulta vectorial: no se recuperaron fragmentos")
-                st.caption("Diagnóstico de búsqueda: no se recuperaron fragmentos.")
+                logger.info(
+                    "Consulta vectorial: no se recuperaron fragmentos en %s",
+                    searched_collections,
+                )
+                st.caption(
+                    "Diagnóstico de búsqueda: no se recuperaron fragmentos "
+                    "en las colecciones."
+                )
         except Exception as e:
             logger.exception("Error al consultar la base vectorial")
             st.error(f"Error al consultar la base de datos de Gabo: {e}")
