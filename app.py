@@ -71,6 +71,14 @@ def cargar_recursos():
 
 try:
     model, collections = cargar_recursos()
+    collection_counts = {
+        collection.name: collection.count()
+        for collection in collections
+    }
+    st.caption(
+        f"Base vectorial cargada: {sum(collection_counts.values())} fragmentos "
+        f"en {len(collections)} colección(es)."
+    )
 except Exception as e:
     logger.exception("No se pudo inicializar la base vectorial")
     st.error(
@@ -138,14 +146,14 @@ if user_query := st.chat_input("¿Cuáles son las tareas pendientes de la asocia
                         if meta
                         else collection.name
                     )
-                    candidates.append((distance, source, doc))
+                    candidates.append((distance, source, doc, collection.name))
 
             candidates.sort(key=lambda result: result[0])
             selected_results = candidates[:4]
             if selected_results:
                 context = "\n\n---\n\n".join(
                     f"[Fuente: {source}]\n{doc}"
-                    for _, source, doc in selected_results
+                    for _, source, doc, _ in selected_results
                 )
                 logger.info(
                     "Consulta vectorial: %s fragmentos recuperados en %s",
@@ -157,6 +165,13 @@ if user_query := st.chat_input("¿Cuáles son las tareas pendientes de la asocia
                     f"fragmentos recuperados en {len(searched_collections)} "
                     "colección(es)."
                 )
+                with st.expander("Ver qué fragmentos encontró la búsqueda"):
+                    for distance, source, doc, collection_name in selected_results:
+                        st.caption(
+                            f"Colección: {collection_name} · Fuente: {source} "
+                            f"· Distancia: {distance:.4f}"
+                        )
+                        st.text(doc[:1000])
             else:
                 context = ""
                 logger.info(
@@ -173,7 +188,13 @@ if user_query := st.chat_input("¿Cuáles son las tareas pendientes de la asocia
             st.stop()
 
         # B. Responder usando Gemini si hay API Key disponible
-        if gemini_key:
+        if not context:
+            full_response = (
+                "No se recuperó contexto de los documentos para esta consulta. "
+                "Revisa el diagnóstico de búsqueda y confirma que la base "
+                "vectorial desplegada contenga los documentos esperados."
+            )
+        elif gemini_key:
             try:
                 client_gemini = genai.Client(api_key=gemini_key)
                 prompt = f"""Eres Gabo el Garrobo, la mascota oficial y asistente experto de IA de la Asociación de Tiro con Arco de Alajuela (ASTICA).
@@ -198,7 +219,13 @@ Respuesta de Gabo:"""
                     contents=prompt
                 )
                 full_response = response.text
+                if not full_response or not full_response.strip():
+                    full_response = (
+                        "Gemini no devolvió texto para esta consulta. "
+                        "Revisa los registros de la aplicación para más detalles."
+                    )
             except Exception as e:
+                logger.exception("Error al generar respuesta con Gemini")
                 full_response = f"¡Ups! Tuve un inconveniente al conectar con mi cerebro de IA: {e}"
         else:
             full_response = "⚠️ Por favor, introduce tu Gemini API Key en la barra lateral izquierda para que pueda responderte."
