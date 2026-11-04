@@ -1,13 +1,53 @@
 import streamlit as st
+from streamlit.errors import StreamlitSecretNotFoundError
 import chromadb
 from sentence_transformers import SentenceTransformer
 from google import genai
 import os
 from pathlib import Path
 import re
+import hmac
 
 # 1. Configuración de la interfaz con la identidad de Gabo el Garrobo
 st.set_page_config(page_title="Gabo el Garrobo - ASTICA RAG", page_icon="🦎", layout="centered")
+
+try:
+    login_user = st.secrets["user"]
+    login_password = st.secrets["password"]
+except (KeyError, StreamlitSecretNotFoundError):
+    st.error("Faltan los secretos 'user' y 'password' en la configuración de Streamlit.")
+    st.stop()
+
+if not login_user or not login_password:
+    st.error("Los secretos 'user' y 'password' de Streamlit no pueden estar vacíos.")
+    st.stop()
+
+if "authenticated" not in st.session_state:
+    st.session_state.authenticated = False
+
+if not st.session_state.authenticated:
+    with st.form("login_form"):
+        st.subheader("Iniciar sesión")
+        entered_user = st.text_input("Usuario")
+        entered_password = st.text_input("Contraseña", type="password")
+        login_submitted = st.form_submit_button("Ingresar")
+
+    if login_submitted:
+        valid_user = hmac.compare_digest(
+            entered_user.encode("utf-8"),
+            str(login_user).encode("utf-8"),
+        )
+        valid_password = hmac.compare_digest(
+            entered_password.encode("utf-8"),
+            str(login_password).encode("utf-8"),
+        )
+        if valid_user and valid_password:
+            st.session_state.authenticated = True
+        else:
+            st.error("Usuario o contraseña incorrectos.")
+
+    if not st.session_state.authenticated:
+        st.stop()
 
 # Diseño de cabecera con la mascota
 st.markdown("""
