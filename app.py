@@ -4,6 +4,7 @@ from sentence_transformers import SentenceTransformer
 from google import genai
 import os
 from pathlib import Path
+import re
 
 # 1. Configuración de la interfaz con la identidad de Gabo el Garrobo
 st.set_page_config(page_title="Gabo el Garrobo - ASTICA RAG", page_icon="🦎", layout="centered")
@@ -26,10 +27,44 @@ def cargar_recursos():
     db_path = Path(__file__).resolve().parent / "chroma_db"
     client_chroma = chromadb.PersistentClient(path=str(db_path))
     collection = client_chroma.get_collection(name="langchain")
-    return model, collection
+    metadata = collection.get(include=["metadatas"])["metadatas"] or []
+    sources = sorted({
+        item["source"]
+        for item in metadata
+        if item and item.get("source")
+    })
+    return model, collection, sources
+
+
+def buscar_fuente_consultada(query, sources):
+    normalized_query = query.casefold()
+    for source in sources:
+        if Path(source).stem.casefold() in normalized_query:
+            return source
+
+    acta_match = re.search(
+        r"\bacta\s*(?:n[úu]m(?:ero)?\.?\s*)?0*(\d{1,3})\b",
+        query,
+        flags=re.IGNORECASE,
+    )
+    if not acta_match:
+        return None
+
+    acta_number = int(acta_match.group(1))
+    for source in sources:
+        range_match = re.match(
+            r"^\s*0*(\d{1,3})(?:\s*[-–]\s*0*(\d{1,3}))?",
+            source,
+        )
+        if range_match:
+            first_number = int(range_match.group(1))
+            last_number = int(range_match.group(2) or first_number)
+            if first_number <= acta_number <= last_number:
+                return source
+    return None
 
 try:
-    model, collection = cargar_recursos()
+    model, collection, sources = cargar_recursos()
 except Exception as e:
     st.error(f"Error inicializando la base de datos vectorial: {e}")
     st.stop()
@@ -72,27 +107,49 @@ if user_query := st.chat_input("¿Cuáles son las tareas pendientes de la asocia
         message_placeholder = st.empty()
         message_placeholder.markdown("🔍 *Gabo está buscando en todos los documentos de ASTICA...*")
         
+        list_files_request = bool(re.search(
+            r"\b(?:archivos?|documentos?)\b.*\b(?:disponibles|tienes|guardados|cargados|indexados)\b",
+            user_query,
+            flags=re.IGNORECASE,
+        ))
+
         # A. Recuperar contexto de ChromaDB
         try:
-            query_embedding = model.encode(user_query).tolist()
-            results = collection.query(query_embeddings=[query_embedding], n_results=4)
-            
             formatted_context_list = []
-            if results and results['documents'] and len(results['documents'][0]) > 0:
-                for idx in range(len(results['documents'][0])):
-                    doc = results['documents'][0][idx]
-                    meta = results['metadatas'][0][idx]
-                    source = meta.get('source', 'Documento sin nombre') if meta else 'Documento sin nombre'
-                    formatted_context_list.append(f"[Fuente: {source}]\n{doc}")
-                context = "\n\n---\n\n".join(formatted_context_list)
-            else:
+            requested_source = buscar_fuente_consultada(user_query, sources)
+            if list_files_request:
                 context = ""
+            elif requested_source:
+                documents = collection.get(
+                    where={"source": requested_source},
+                    include=["documents", "metadatas"],
+                )
+                for doc, meta in zip(documents["documents"], documents["metadatas"]):
+                    source = meta.get("source", requested_source) if meta else requested_source
+                    formatted_context_list.append(f"[Fuente: {source}]\n{doc}")
+            else:
+                query_embedding = model.encode(user_query).tolist()
+                results = collection.query(
+                    query_embeddings=[query_embedding],
+                    n_results=collection.count(),
+                )
+                if results and results["documents"] and results["documents"][0]:
+                    for doc, meta in zip(results["documents"][0], results["metadatas"][0]):
+                        source = meta.get("source", "Documento sin nombre") if meta else "Documento sin nombre"
+                        formatted_context_list.append(f"[Fuente: {source}]\n{doc}")
+            context = "\n\n---\n\n".join(formatted_context_list)
         except Exception as e:
             context = ""
             st.error(f"Error al consultar la base de datos de Gabo: {e}")
 
         # B. Responder usando Gemini si hay API Key disponible
-        if gemini_key:
+        if list_files_request:
+            if sources:
+                full_response = "Estos son todos los documentos que tengo indexados:\n\n"
+                full_response += "\n".join(f"- **{source}**" for source in sources)
+            else:
+                full_response = "No hay documentos indexados en este momento."
+        elif gemini_key:
             try:
                 client_gemini = genai.Client(api_key=gemini_key)
                 prompt = f"""Eres Gabo el Garrobo, la mascota oficial y asistente experto de IA de la Asociación de Tiro con Arco de Alajuela (ASTICA).
