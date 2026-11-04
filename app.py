@@ -32,7 +32,13 @@ except Exception as e:
     st.error(f"Error inicializando la base de datos vectorial: {e}")
 
 # 3. Configurar cliente de generación de forma segura
-gemini_key = os.environ.get("GOOGLE_API_KEY", "")
+try:
+    gemini_key = st.secrets.get("GEMINI_API_KEY", "")
+except Exception:
+    gemini_key = ""
+
+if not gemini_key:
+    gemini_key = os.environ.get("GOOGLE_API_KEY", "")
 if not gemini_key:
     # Campo en la barra lateral para introducir la API Key si no se configuró como variable de entorno
     gemini_key = st.sidebar.text_input("Ingresa tu Gemini API Key", type="password")
