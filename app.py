@@ -43,6 +43,7 @@ if not st.session_state.authenticated:
         )
         if valid_user and valid_password:
             st.session_state.authenticated = True
+            st.rerun()
         else:
             st.error("Usuario o contraseña incorrectos.")
 
