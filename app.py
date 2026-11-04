@@ -1,14 +1,8 @@
-import logging
-import os
-from pathlib import Path
-
 import streamlit as st
 import chromadb
 from sentence_transformers import SentenceTransformer
 from google import genai
-
-logger = logging.getLogger(__name__)
-CHROMA_DB_PATH = Path(__file__).resolve().parent / "chroma_db"
+import os
 
 # 1. Configuración de la interfaz con la identidad de Gabo el Garrobo
 st.set_page_config(page_title="Gabo el Garrobo - ASTICA RAG", page_icon="🦎", layout="centered")
@@ -25,77 +19,20 @@ st.markdown("""
 # 2. Inicializar recursos del sistema RAG de forma persistente o en caché
 @st.cache_resource
 def cargar_recursos():
-    # Conectar a la BD vectorial local de Chroma
-    client_chroma = chromadb.PersistentClient(path=str(CHROMA_DB_PATH))
-    collection_names = [
-        str(getattr(item, "name", item))
-        for item in client_chroma.list_collections()
-    ]
-    if not collection_names:
-        db_file = CHROMA_DB_PATH / "chroma.sqlite3"
-        db_status = (
-            f"Existe chroma.sqlite3 ({db_file.stat().st_size} bytes)."
-            if db_file.is_file()
-            else "No existe chroma.sqlite3."
-        )
-        raise RuntimeError(
-            "No se encontraron colecciones en Chroma. "
-            f"Base esperada: {db_status}"
-        )
-
-    collections = [
-        client_chroma.get_collection(name=name)
-        for name in collection_names
-    ]
-    collection_counts = {
-        collection.name: collection.count()
-        for collection in collections
-    }
-    collections = [
-        collection for collection in collections
-        if collection_counts[collection.name] > 0
-    ]
-    if not collections:
-        raise RuntimeError(
-            f"Las colecciones encontradas están vacías en {CHROMA_DB_PATH}: "
-            f"{collection_counts}."
-        )
-    logger.info(
-        "Colecciones cargadas desde %s: %s",
-        CHROMA_DB_PATH,
-        {collection.name: collection_counts[collection.name] for collection in collections},
-    )
-    # Cargar modelo de embeddings después de validar la colección.
+    # Cargar modelo de embeddings
     model = SentenceTransformer('all-MiniLM-L6-v2')
-    return model, collections
+    # Conectar a la BD vectorial local de Chroma
+    client_chroma = chromadb.PersistentClient(path="./chroma_db")
+    collection = client_chroma.get_or_create_collection(name="actas_asociacion")
+    return model, collection
 
 try:
-    model, collections = cargar_recursos()
-    collection_counts = {
-        collection.name: collection.count()
-        for collection in collections
-    }
-    st.caption(
-        f"Base vectorial cargada: {sum(collection_counts.values())} fragmentos "
-        f"en {len(collections)} colección(es)."
-    )
+    model, collection = cargar_recursos()
 except Exception as e:
-    logger.exception("No se pudo inicializar la base vectorial")
-    st.error(
-        f"No se pudo cargar la base vectorial en {CHROMA_DB_PATH}. "
-        f"Verifica que la carpeta y las colecciones estén incluidas en el "
-        f"despliegue. Detalle: {e}"
-    )
-    st.stop()
+    st.error(f"Error inicializando la base de datos vectorial: {e}")
 
 # 3. Configurar cliente de generación de forma segura
-try:
-    gemini_key = st.secrets.get("GEMINI_API_KEY", "")
-except Exception:
-    gemini_key = ""
-
-if not gemini_key:
-    gemini_key = os.environ.get("GOOGLE_API_KEY", "")
+gemini_key = os.environ.get("GOOGLE_API_KEY", "")
 if not gemini_key:
     # Campo en la barra lateral para introducir la API Key si no se configuró como variable de entorno
     gemini_key = st.sidebar.text_input("Ingresa tu Gemini API Key", type="password")
@@ -125,76 +62,23 @@ if user_query := st.chat_input("¿Cuáles son las tareas pendientes de la asocia
         # A. Recuperar contexto de ChromaDB
         try:
             query_embedding = model.encode(user_query).tolist()
-            candidates = []
-            searched_collections = []
-            for collection in collections:
-                results = collection.query(
-                    query_embeddings=[query_embedding],
-                    n_results=4,
-                    include=["documents", "metadatas", "distances"],
-                )
-                searched_collections.append(collection.name)
-                documents = results["documents"][0]
-                metadatas = results["metadatas"][0]
-                distances = results["distances"][0]
-
-                for doc, meta, distance in zip(documents, metadatas, distances):
-                    if doc is None:
-                        continue
-                    source = (
-                        meta.get("source", collection.name)
-                        if meta
-                        else collection.name
-                    )
-                    candidates.append((distance, source, doc, collection.name))
-
-            candidates.sort(key=lambda result: result[0])
-            selected_results = candidates[:4]
-            if selected_results:
-                context = "\n\n---\n\n".join(
-                    f"[Fuente: {source}]\n{doc}"
-                    for _, source, doc, _ in selected_results
-                )
-                logger.info(
-                    "Consulta vectorial: %s fragmentos recuperados en %s",
-                    len(selected_results),
-                    ", ".join(searched_collections),
-                )
-                st.caption(
-                    f"Diagnóstico de búsqueda: {len(selected_results)} "
-                    f"fragmentos recuperados en {len(searched_collections)} "
-                    "colección(es)."
-                )
-                with st.expander("Ver qué fragmentos encontró la búsqueda"):
-                    for distance, source, doc, collection_name in selected_results:
-                        st.caption(
-                            f"Colección: {collection_name} · Fuente: {source} "
-                            f"· Distancia: {distance:.4f}"
-                        )
-                        st.text(doc[:1000])
+            results = collection.query(query_embeddings=[query_embedding], n_results=4)
+            
+            formatted_context_list = []
+            if results and results['documents'] and len(results['documents'][0]) > 0:
+                for idx in range(len(results['documents'][0])):
+                    doc = results['documents'][0][idx]
+                    meta = results['metadatas'][0][idx]
+                    formatted_context_list.append(f"[Fuente: {meta['source']}]\n{doc}")
+                context = "\n\n---\n\n".join(formatted_context_list)
             else:
                 context = ""
-                logger.info(
-                    "Consulta vectorial: no se recuperaron fragmentos en %s",
-                    searched_collections,
-                )
-                st.caption(
-                    "Diagnóstico de búsqueda: no se recuperaron fragmentos "
-                    "en las colecciones."
-                )
         except Exception as e:
-            logger.exception("Error al consultar la base vectorial")
+            context = ""
             st.error(f"Error al consultar la base de datos de Gabo: {e}")
-            st.stop()
 
         # B. Responder usando Gemini si hay API Key disponible
-        if not context:
-            full_response = (
-                "No se recuperó contexto de los documentos para esta consulta. "
-                "Revisa el diagnóstico de búsqueda y confirma que la base "
-                "vectorial desplegada contenga los documentos esperados."
-            )
-        elif gemini_key:
+        if gemini_key:
             try:
                 client_gemini = genai.Client(api_key=gemini_key)
                 prompt = f"""Eres Gabo el Garrobo, la mascota oficial y asistente experto de IA de la Asociación de Tiro con Arco de Alajuela (ASTICA).
@@ -219,13 +103,7 @@ Respuesta de Gabo:"""
                     contents=prompt
                 )
                 full_response = response.text
-                if not full_response or not full_response.strip():
-                    full_response = (
-                        "Gemini no devolvió texto para esta consulta. "
-                        "Revisa los registros de la aplicación para más detalles."
-                    )
             except Exception as e:
-                logger.exception("Error al generar respuesta con Gemini")
                 full_response = f"¡Ups! Tuve un inconveniente al conectar con mi cerebro de IA: {e}"
         else:
             full_response = "⚠️ Por favor, introduce tu Gemini API Key en la barra lateral izquierda para que pueda responderte."
