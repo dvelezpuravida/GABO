@@ -3,6 +3,7 @@ import chromadb
 from sentence_transformers import SentenceTransformer
 from google import genai
 import os
+from pathlib import Path
 
 # 1. Configuración de la interfaz con la identidad de Gabo el Garrobo
 st.set_page_config(page_title="Gabo el Garrobo - ASTICA RAG", page_icon="🦎", layout="centered")
@@ -22,14 +23,20 @@ def cargar_recursos():
     # Cargar modelo de embeddings
     model = SentenceTransformer('all-MiniLM-L6-v2')
     # Conectar a la BD vectorial local de Chroma
-    client_chroma = chromadb.PersistentClient(path="./chroma_db")
-    collection = client_chroma.get_or_create_collection(name="actas_asociacion")
+    db_path = Path(__file__).resolve().parent / "chroma_db"
+    client_chroma = chromadb.PersistentClient(path=str(db_path))
+    collection = client_chroma.get_collection(name="langchain")
     return model, collection
 
 try:
     model, collection = cargar_recursos()
 except Exception as e:
     st.error(f"Error inicializando la base de datos vectorial: {e}")
+    st.stop()
+
+if collection.count() == 0:
+    st.error("La colección 'langchain' existe, pero no contiene documentos indexados.")
+    st.stop()
 
 # 3. Configurar cliente de generación de forma segura
 try:
@@ -75,7 +82,8 @@ if user_query := st.chat_input("¿Cuáles son las tareas pendientes de la asocia
                 for idx in range(len(results['documents'][0])):
                     doc = results['documents'][0][idx]
                     meta = results['metadatas'][0][idx]
-                    formatted_context_list.append(f"[Fuente: {meta['source']}]\n{doc}")
+                    source = meta.get('source', 'Documento sin nombre') if meta else 'Documento sin nombre'
+                    formatted_context_list.append(f"[Fuente: {source}]\n{doc}")
                 context = "\n\n---\n\n".join(formatted_context_list)
             else:
                 context = ""
