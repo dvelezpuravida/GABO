@@ -56,7 +56,7 @@ No agregues `secrets.toml`, claves API ni contraseñas reales al repositorio.
 
 4. Guarda la configuración y espera a que Streamlit termine el despliegue.
 
-La app requiere los secretos `user` y `password`; si faltan o están vacíos, bloquea el acceso. `GEMINI_API_KEY` es la clave usada para generar respuestas. Si no está configurada como secreto, también se puede ingresar desde la barra lateral o establecer la variable de entorno `GOOGLE_API_KEY`.
+La app requiere los secretos `user` y `password`; si faltan o están vacíos, bloquea el acceso. En el login se ignoran espacios al inicio y al final del usuario y de la contraseña; mayúsculas y minúsculas sí deben coincidir. `GEMINI_API_KEY` es la clave usada para generar respuestas. Si no está configurada como secreto, también se puede ingresar desde la barra lateral o establecer la variable de entorno `GOOGLE_API_KEY`.
 
 ## Base de documentos
 

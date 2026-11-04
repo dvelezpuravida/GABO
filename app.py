@@ -34,12 +34,12 @@ if not st.session_state.authenticated:
 
     if login_submitted:
         valid_user = hmac.compare_digest(
-            entered_user.encode("utf-8"),
-            str(login_user).encode("utf-8"),
+            entered_user.strip().encode("utf-8"),
+            str(login_user).strip().encode("utf-8"),
         )
         valid_password = hmac.compare_digest(
-            entered_password.encode("utf-8"),
-            str(login_password).encode("utf-8"),
+            entered_password.strip().encode("utf-8"),
+            str(login_password).strip().encode("utf-8"),
         )
         if valid_user and valid_password:
             st.session_state.authenticated = True
